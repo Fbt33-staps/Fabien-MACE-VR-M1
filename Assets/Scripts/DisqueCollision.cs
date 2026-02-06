@@ -1,158 +1,103 @@
 using UnityEngine;
-using UnityEngine.XR; // Indispensable pour détecter les manettes VR
+using UnityEngine.XR;
 
 public class DisqueCollision : MonoBehaviour
 {
-    // --- VARIABLES PUBLIQUES (Remplies automatiquement par le Manager lors du Spawn) ---
-    [Header("Paramètres reçus du Manager")]
-    public bool modeReaching;      // Est-ce qu'on doit toucher (Vrai) ou cliquer (Faux) ?
-    public int couleurID;          // 0=Jaune, 1=Bleu, 2=Rouge
-    public string nomCondition;    // "JAUNE", "BLEU" ou "ROUGE"
-    public string mainAttendue;    // "MAIN_DROITE", "MAIN_GAUCHE" ou "AUCUNE"
-    public StimulusController manager; // Lien vers le cerveau de l'expérience
+    public bool modeReaching;
+    public int couleurID;
+    public string nomCondition;
+    public string mainAttendue;
+    public StimulusController manager;
 
-    // --- VARIABLES INTERNES ---
-    private bool aRepondu = false; // Pour éviter de répondre 2 fois sur le même essai
-    private float tempsApparition; // L'heure exacte où la balle est apparue
+    public GameObject iconeSucces;   
+    public GameObject iconeEchec;    
+    public Renderer monRenderer;     
+
+    private bool aRepondu = false;
+    private float tempsApparition;
 
     void Start()
     {
-        // 1. On note l'heure de naissance de la balle
         tempsApparition = Time.time;
-
-        // 2. Sécurité : On lance un compte à rebours de 2 secondes.
-        // Si le joueur ne fait rien pendant 2s, la fonction "TropTard" se lancera.
+        if (monRenderer == null) monRenderer = GetComponent<Renderer>(); 
         Invoke("TropTard", 2.0f);
     }
 
     void Update()
     {
-        // Si le joueur a déjà répondu, on ne fait plus rien
         if (aRepondu) return;
-
-        // --- GESTION MODE GACHETTE (Statique) ---
-        // Ce bloc ne s'exécute QUE si la case "Mode Reaching" est DECOCHÉE
         if (!modeReaching)
         {
-            // On vérifie les boutons "Trigger" des manettes VR
-            // (J'ai laissé les flèches clavier pour tester sans casque)
             bool triggerG = IsTriggerPressed(XRNode.LeftHand) || Input.GetKeyDown(KeyCode.LeftArrow);
             bool triggerD = IsTriggerPressed(XRNode.RightHand) || Input.GetKeyDown(KeyCode.RightArrow);
-
-            // Si au moins un bouton est pressé
             if (triggerG || triggerD)
             {
                 string action = "INCONNU";
                 if (triggerG) action = "MAIN_GAUCHE";
                 if (triggerD) action = "MAIN_DROITE";
-                if (triggerG && triggerD) action = "LES_DEUX"; // Cas très rare
-
+                if (triggerG && triggerD) action = "LES_DEUX"; 
                 AnalyserReponse(action);
             }
         }
     }
 
-    // --- GESTION MODE REACHING (Mouvement) ---
-    // Cette fonction Unity se déclenche automatiquement quand un objet physique touche la balle
     void OnTriggerEnter(Collider other)
     {
-        // On ignore la collision si :
-        // 1. Le joueur a déjà répondu
-        // 2. On est en mode Gâchette (car on ne veut pas de collision physique)
         if (aRepondu || !modeReaching) return;
-
         string action = "INCONNU";
-
-        // On vérifie le TAG de l'objet qui nous touche
         if (other.CompareTag("MainGauche")) action = "MAIN_GAUCHE";
         else if (other.CompareTag("MainDroite")) action = "MAIN_DROITE";
-        else return; // Si c'est le mur, le sol ou la tête, on ignore et on continue
-
-        // Si c'est bien une main, on analyse !
+        else return;
         AnalyserReponse(action);
     }
 
-    // --- CERVEAU DU DISQUE : ANALYSE ---
     void AnalyserReponse(string actionJoueur)
     {
         aRepondu = true;
-        CancelInvoke("TropTard"); // IMPORTANT : On arrête le chrono de sécurité car le joueur a réagi
-
-        // Calcul du Temps de Réaction (Temps actuel - Temps début)
+        CancelInvoke("TropTard");
         float trt = Time.time - tempsApparition;
         string resultat = "ERREUR";
 
-        // LOGIQUE DE VALIDATION
-        if (couleurID == 0) // CIBLE JAUNE (Attend Droite)
-        {
-            if (actionJoueur == "MAIN_DROITE") resultat = "SUCCES";
-            else resultat = "ECHEC_MAUVAIS_COTE";
-        }
-        else if (couleurID == 1) // CIBLE BLEUE (Attend Gauche)
-        {
-            if (actionJoueur == "MAIN_GAUCHE") resultat = "SUCCES";
-            else resultat = "ECHEC_MAUVAIS_COTE";
-        }
-        else // CIBLE ROUGE (No-Go / Interdit)
-        {
-            // Si on est ici, c'est qu'on a bougé alors qu'il fallait rester immobile
-            resultat = "ECHEC_COMMISSION";
-        }
+        if (couleurID == 0) { if (actionJoueur == "MAIN_DROITE") resultat = "SUCCES"; else resultat = "ECHEC_MAUVAIS_COTE"; }
+        else if (couleurID == 1) { if (actionJoueur == "MAIN_GAUCHE") resultat = "SUCCES"; else resultat = "ECHEC_MAUVAIS_COTE"; }
+        else { resultat = "ECHEC_COMMISSION"; }
 
-        Debug.Log($"Résultat: {resultat} | TRT: {trt:F4}");
-
-        // --- ENVOI AU MANAGER ---
-        // C'est ici que la magie opère. On dit au Manager : "C'est fini !"
-        // Le Manager va recevoir ça et se dire : "Ok, maintenant j'allume la Zone de Départ".
-        if (manager != null)
-        {
-            manager.FinEssai(nomCondition, mainAttendue, actionJoueur, resultat, trt);
-        }
-
-        // La balle a fini son travail, elle disparaît.
-        Destroy(gameObject);
+        Envoyer(resultat, actionJoueur, trt);
     }
 
-    // --- GESTION DU TEMPS ECOULÉ (TIMEOUT) ---
     void TropTard()
     {
         if (aRepondu) return;
         aRepondu = true;
-
-        float trt = 2.0f; // On note le temps max
-        string actionJoueur = "AUCUNE"; // Le joueur n'a rien fait
-
-        string resultat = "";
-
-        // CAS SPECIAL : Si c'était ROUGE (No-Go), ne rien faire est une victoire !
-        if (couleurID == 2)
-        {
-            resultat = "SUCCES_NOGO";
-        }
-        else // Sinon, c'est un échec par omission (trop lent ou endormi)
-        {
-            resultat = "ECHEC_OMISSION";
-        }
-
-        if (manager != null)
-        {
-            manager.FinEssai(nomCondition, mainAttendue, actionJoueur, resultat, trt);
-        }
-
-        Destroy(gameObject);
+        float trt = 2.0f;
+        string actionJoueur = "AUCUNE";
+        string resultat = (couleurID == 2) ? "SUCCES_NOGO" : "ECHEC_OMISSION";
+        Envoyer(resultat, actionJoueur, trt);
     }
 
-    // --- UTILITAIRE VR ---
-    // Petite fonction pour vérifier proprement si le bouton Trigger est appuyé
+    void Envoyer(string resultat, string actionJoueur, float trt)
+    {
+        if (manager != null) manager.FinEssai(nomCondition, mainAttendue, actionJoueur, resultat, trt);
+        
+        bool modeEntrainement = (manager != null && manager.estEnFamiliarisation);
+        if (modeEntrainement)
+        {
+            if(monRenderer != null) monRenderer.enabled = false;
+            if (resultat.Contains("SUCCES")) { if(iconeSucces != null) iconeSucces.SetActive(true); }
+            else { if(iconeEchec != null) iconeEchec.SetActive(true); }
+            Destroy(gameObject, 1.0f);
+        }
+        else
+        {
+            Destroy(gameObject);
+        }
+    }
+
     bool IsTriggerPressed(XRNode node)
     {
         InputDevice device = InputDevices.GetDeviceAtXRNode(node);
         bool val = false;
-        if (device.isValid)
-        {
-            // On demande à la manette : "Est-ce que le trigger est appuyé ?"
-            device.TryGetFeatureValue(CommonUsages.triggerButton, out val);
-        }
+        if (device.isValid) device.TryGetFeatureValue(CommonUsages.triggerButton, out val);
         return val;
     }
 }
